@@ -11,6 +11,7 @@ import { MachOSliceArtifactReader } from "./MachOSliceArtifactReader.js";
 import { NativeDmgArtifactReader } from "./NativeDmgArtifactReader.js";
 import { NodeSeaArtifactReader } from "./NodeSeaArtifactReader.js";
 import { PyInstallerArtifactReader } from "./PyInstallerArtifactReader.js";
+import { UnityFsArtifactReader } from "./UnityFsArtifactReader.js";
 import { ZipArtifactReader } from "./ZipArtifactReader.js";
 import type { ArtifactOccurrence } from "../domain/artifactGraph.js";
 import {
@@ -28,6 +29,7 @@ export type ArtifactReaderFormat =
   | "godot-pck"
   | "intel-hex"
   | "srec"
+  | "unityfs"
   | "mach-o-universal"
   | "dmg"
   | ZipPackageFormat;
@@ -111,6 +113,8 @@ export function createArtifactReader(
     case "intel-hex":
     case "srec":
       return new HexRecordArtifactReader(path, format, rootSource);
+    case "unityfs":
+      return new UnityFsArtifactReader(path, rootSource);
     case "mach-o-universal":
       return new MachOSliceArtifactReader(
         path,

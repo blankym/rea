@@ -1,5 +1,6 @@
 import { hasGodotPckHeader } from "../../domain/godotPckFormat.js";
 import { detectHexRecordEncoding } from "../../domain/firmware/hexRecords.js";
+import { hasUnityFsHeader } from "../../domain/unityfsFormat.js";
 import type { ArtifactClassificationEvidence } from "../ArtifactClassificationProbe.js";
 import { asarHeaderAdmissionFailure } from "../AsarHeader.js";
 import { hasDestinationPath } from "../ArtifactPaths.js";
@@ -279,6 +280,7 @@ export const rootOccurrenceFor = (
     [
       "asar",
       "godot-pck",
+      "unityfs",
       "dmg",
       "pkg",
       "pyinstaller",
@@ -293,7 +295,8 @@ export const rootOccurrenceFor = (
   compressed_size: null,
   executable: metadata.executable,
   encrypted:
-    metadata.formatMetadata?.kind === "godot-pck" &&
+    (metadata.formatMetadata?.kind === "godot-pck" ||
+      metadata.formatMetadata?.kind === "unityfs") &&
     metadata.formatMetadata.directory_status === "encrypted",
   hash_status: "verified",
   source_location: null,
@@ -575,7 +578,12 @@ const artifactRoleForFormat = (
       format: zipPackageFormatForPath(path) ?? format,
     };
   if (format === "plist") return { kind: "plist", format };
-  if (format === "godot-pck" || format === "intel-hex" || format === "srec")
+  if (
+    format === "godot-pck" ||
+    format === "intel-hex" ||
+    format === "srec" ||
+    format === "unityfs"
+  )
     return { kind: "container", format };
   return {
     kind: ["native-addon", "dynamic-library"].includes(byPath.kind)
@@ -595,6 +603,7 @@ export const classifyArtifactBytes = (
   if (hasGodotPckHeader(prefix)) return "godot-pck";
   const hexRecords = detectHexRecordEncoding(prefix);
   if (hexRecords !== undefined) return hexRecords;
+  if (hasUnityFsHeader(prefix)) return "unityfs";
   if (hasBinaryPlistSignature(prefix)) return "plist";
   if (hasXmlPlistSignature(prefix)) return "plist";
   const fatFormat = classifyFatArtifact(evidence, fileSize);

@@ -76,6 +76,7 @@ import {
 import { hasDiskImageSignature } from "../domain/apple/diskImageFormat.js";
 import { hasGodotPckHeader } from "../domain/godotPckFormat.js";
 import { detectHexRecordEncoding } from "../domain/firmware/hexRecords.js";
+import { hasUnityFsHeader } from "../domain/unityfsFormat.js";
 import {
   hasZipSignature,
   locateTrailingZipArchive,
@@ -668,6 +669,7 @@ const detectArtifactFormat = async (
   if (hasGodotPckHeader(magic)) return "godot-pck";
   const hexRecords = detectHexRecordEncoding(magic);
   if (hexRecords !== undefined) return hexRecords;
+  if (hasUnityFsHeader(magic)) return "unityfs";
   // Binary plists, including keyed archives, often use other extensions.
   if (hasBinaryPlistSignature(magic)) return "plist";
   const named = namedArtifactFormat(lower);
@@ -735,7 +737,15 @@ const isArchiveFormat = (
   >,
 ): format is Extract<BinaryTarget, { kind: "archive" }>["format"] =>
   isZipPackageFormat(format) ||
-  ["asar", "godot-pck", "dmg", "pkg", "intel-hex", "srec"].includes(format);
+  [
+    "asar",
+    "godot-pck",
+    "unityfs",
+    "dmg",
+    "pkg",
+    "intel-hex",
+    "srec",
+  ].includes(format);
 
 /** Whether the leading bytes begin any executable header family, valid or not. */
 const claimsLeadingExecutableHeader = async (

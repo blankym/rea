@@ -177,6 +177,7 @@ export interface ArtifactReader {
     | ZipPackageFormat
     | "asar"
     | "godot-pck"
+    | "unityfs"
     | "pyinstaller"
     | "node-sea"
     | "intel-hex"

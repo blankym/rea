@@ -652,3 +652,11 @@ page cannot prove absence in unknown coverage. Retained views are historical,
 not fresh filesystem checks. No decryption, Godot resource decoding, GDScript
 decompilation or target execution is provided. See
 [Godot PCK](https://github.com/morluto/rea/blob/main/docs/godot-pck.md).
+
+UnityFS AssetBundle containers (`.bundle`, `.ab`, YooAsset packages and other
+byte-identified files) list `CAB-*` SerializedFiles and `.resS` members with
+header and node facts; none/LZ4/LZ4HC member blocks stream on demand. Bundles
+declaring asset-bundle encryption keep header facts with unknown directory
+coverage; LZMA blocks report unsupported coverage or an unavailable read. No
+decryption or SerializedFile object decoding is provided. See
+[UnityFS](https://github.com/morluto/rea/blob/main/docs/unityfs.md).
