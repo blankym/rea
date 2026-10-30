@@ -49,6 +49,8 @@ export interface ArtifactEntry {
   readonly declaredIntegrity: ArtifactIntegrityClaim | null;
   readonly formatMetadata?: ArtifactFormatMetadata;
   readonly unpacked: boolean;
+  /** Declared reason member bytes cannot be produced; open() must reject such entries. */
+  readonly unavailable?: string;
   readonly limitations: readonly string[];
   readonly adapterKey: string;
   /** Filesystem identity captured during traversal, when supplied by an adapter. */
@@ -112,6 +114,7 @@ export const sameArtifactEntry = (
   sameDeclaredIntegrity(entry.declaredIntegrity, produced.declaredIntegrity) &&
   sameFormatMetadata(entry.formatMetadata, produced.formatMetadata) &&
   entry.unpacked === produced.unpacked &&
+  entry.unavailable === produced.unavailable &&
   entry.adapterKey === produced.adapterKey &&
   entry.limitations.length === produced.limitations.length &&
   entry.limitations.every(

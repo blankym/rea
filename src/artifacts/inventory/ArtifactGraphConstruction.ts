@@ -127,7 +127,10 @@ export const createOccurrence = (
     (options.sourceFormat === "asar" && entry.kind === "file")
       ? { unpacked: entry.unpacked }
       : {}),
-    hash_status: entry.encrypted ? "unavailable" : "not-hashed",
+    hash_status:
+      entry.encrypted || entry.unavailable !== undefined
+        ? "unavailable"
+        : "not-hashed",
     source_location:
       entry.encrypted ||
       entry.byteOffset === null ||

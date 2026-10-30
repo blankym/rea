@@ -149,7 +149,10 @@ export const inspectDesktopFile = async (
           format_version: unityfsHeader.formatVersion,
           engine_version: unityfsHeader.engineVersion,
           flags: unityfsHeader.flags,
-          declared_size: Number(unityfsHeader.declaredSize),
+          declared_size:
+            unityfsHeader.declaredSize <= BigInt(Number.MAX_SAFE_INTEGER)
+              ? Number(unityfsHeader.declaredSize)
+              : null,
         },
       });
   }

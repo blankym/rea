@@ -164,9 +164,12 @@ describe("UnityFsArtifactReader", () => {
     await withReader(
       buildUnityFs(members, { blockCompression: 1 }),
       async (reader) => {
-        const [entry] = await list(reader);
+        const entries = await list(reader);
+        expect(entries).toHaveLength(members.length);
+        const [entry] = entries;
         if (entry === undefined) throw new Error("expected one entry");
-        await expect(text(await reader.open(entry))).rejects.toMatchObject({
+        expect(entry.unavailable).toContain("unsupported");
+        await expect(reader.open(entry)).rejects.toMatchObject({
           reason: "unavailable",
         });
       },
@@ -198,6 +201,86 @@ describe("UnityFsArtifactReader", () => {
     await withReader(bytes, async (reader) => {
       await expect(list(reader)).rejects.toMatchObject({ reason });
     });
+  });
+});
+
+describe("UnityFsArtifactReader directory bounds", () => {
+  it("keeps readable members listed beside unsupported-block siblings", async () => {
+    await withReader(
+      buildUnityFs(
+        [
+          { path: "first.resS", data: Buffer.alloc(16, 0x61) },
+          { path: "second.resS", data: Buffer.alloc(16, 0x62) },
+        ],
+        { blockSize: 16, blockCompression: 2, blockFlags: [2, 1] },
+      ),
+      async (reader) => {
+        const entries: ArtifactEntry[] = [];
+        const coverage: unknown[] = [];
+        for await (const entry of reader.entries(undefined, {
+          onCoverage: (value) => coverage.push(value),
+        }))
+          entries.push(entry);
+        expect(entries).toHaveLength(2);
+        const [readable, unsupported] = entries;
+        if (readable === undefined || unsupported === undefined)
+          throw new Error("expected two entries");
+        expect(readable.unavailable).toBeUndefined();
+        expect(unsupported.unavailable).toContain("unsupported");
+        expect(unsupported.limitations).toEqual([unsupported.unavailable]);
+        expect(await text(await reader.open(readable))).toHaveLength(16);
+        await expect(reader.open(unsupported)).rejects.toMatchObject({
+          reason: "unavailable",
+        });
+        expect(coverage).toEqual([
+          expect.objectContaining({ status: "unknown" }),
+        ]);
+      },
+    );
+  });
+
+  it("refuses a member row count beyond the retained-row bound", async () => {
+    const bytes = buildUnityFs(members, {
+      blocksInfoCompression: 0,
+      declaredNodeCount: 512 * 1024 + 1,
+      tableTrailingBytes: 11 * 1024 * 1024,
+    });
+    await withReader(bytes, async (reader) => {
+      await expect(list(reader)).rejects.toMatchObject({ reason: "limit" });
+    });
+  });
+
+  it("charges every aliased member range to the expansion budget", async () => {
+    const chunk = Buffer.alloc(1024 * 1024, 0x65);
+    const aliased: UnityFsMember[] = [{ path: "base.resS", data: chunk }];
+    for (let index = 0; index < 600; index++)
+      aliased.push({
+        path: `alias-${String(index)}.resS`,
+        data: "",
+        streamOffset: 0,
+        streamSize: chunk.length,
+      });
+    await withReader(buildUnityFs(aliased), async (reader) => {
+      await expect(list(reader)).rejects.toMatchObject({ reason: "limit" });
+    });
+  });
+
+  it("accepts dotted names but rejects traversal paths component-wise", async () => {
+    await withReader(
+      buildUnityFs([{ path: "sub/data..bin", data: "dotdot" }]),
+      async (reader) => {
+        const [entry] = await list(reader);
+        expect(entry?.path).toBe("sub/data..bin");
+        if (entry === undefined) throw new Error("expected one entry");
+        expect(await text(await reader.open(entry))).toBe("dotdot");
+      },
+    );
+    await withReader(
+      buildUnityFs([{ path: "a/../b", data: "bad" }]),
+      async (reader) => {
+        await expect(list(reader)).rejects.toMatchObject({ reason: "path" });
+      },
+    );
   });
 });
 
@@ -234,6 +317,43 @@ describe("UnityFsArtifactReader member streams", () => {
         expect((await text(await reader.open(entry))).length).toBe(data.length);
       },
     );
+  });
+
+  it("ends an in-flight member stream before close() resolves", async () => {
+    const data = Buffer.alloc(2 * 1024 * 1024, 0x64);
+    const reader = new UnityFsArtifactReader(
+      await writeBundle(buildUnityFs([{ path: "big.resS", data }])),
+    );
+    const [entry] = await list(reader);
+    if (entry === undefined) throw new Error("expected one entry");
+    const stream = await reader.open(entry);
+    const iterator = stream[Symbol.asyncIterator]();
+    await iterator.next();
+    await reader.close();
+    await expect(iterator.next()).rejects.toMatchObject({
+      reason: "unavailable",
+    });
+  });
+
+  it("types a corrupt LZ4 block as a format failure", async () => {
+    const bytes = buildUnityFs(members, { blockCompression: 2 });
+    const probe = new UnityFsArtifactReader(await writeBundle(bytes));
+    let dataStart: number | undefined;
+    try {
+      await list(probe);
+      dataStart = probe.formatMetadata()?.data_start;
+    } finally {
+      await probe.close();
+    }
+    if (dataStart === undefined) throw new Error("expected a data start");
+    bytes[dataStart] = (bytes[dataStart] ?? 0) ^ 0xff;
+    await withReader(bytes, async (reader) => {
+      const [entry] = await list(reader);
+      if (entry === undefined) throw new Error("expected one entry");
+      await expect(text(await reader.open(entry))).rejects.toMatchObject({
+        reason: "format",
+      });
+    });
   });
 
   it("refuses an entry that did not come from this reader", async () => {

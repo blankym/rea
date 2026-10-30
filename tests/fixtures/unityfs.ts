@@ -4,6 +4,9 @@ export interface UnityFsMember {
   readonly path: string;
   readonly data: string | Buffer;
   readonly flags?: number;
+  /** Alias a range another member already covers instead of appending data. */
+  readonly streamOffset?: number;
+  readonly streamSize?: number;
 }
 
 export interface UnityFsOptions {
@@ -14,9 +17,13 @@ export interface UnityFsOptions {
   readonly blocksInfoAtEnd?: boolean;
   readonly blocksInfoCompression?: number;
   readonly blockCompression?: number;
+  /** Per-block flag override, indexed by block position. */
+  readonly blockFlags?: readonly number[];
   readonly blockSize?: number;
   readonly declaredNodeCount?: number;
   readonly declaredBlockCount?: number;
+  /** Trailing bytes appended after node rows; enlarges the table without rows. */
+  readonly tableTrailingBytes?: number;
 }
 
 const utf8 = (value: string): Buffer => Buffer.from(value, "utf8");
@@ -60,6 +67,7 @@ const chunkIntoBlocks = (
   stream: Buffer,
   blockSize: number,
   compression: number,
+  flagOverrides?: readonly number[],
 ): { records: BlockRecord[]; payload: Buffer[] } => {
   const records: BlockRecord[] = [];
   const payload: Buffer[] = [];
@@ -73,7 +81,7 @@ const chunkIntoBlocks = (
     records.push({
       uncompressedSize: uncompressed.length,
       compressedSize: compressed.length,
-      flags: compression,
+      flags: flagOverrides?.[records.length] ?? compression,
     });
     payload.push(compressed);
     offset += blockSize;
@@ -90,13 +98,14 @@ const buildTable = (
 ): Buffer => {
   let offsets = 0;
   const nodeRecords = members.map((member, index) => {
+    const appended = contents[index]?.length ?? 0;
     const record = {
-      offset: offsets,
-      size: contents[index]?.length ?? 0,
+      offset: member.streamOffset ?? offsets,
+      size: member.streamSize ?? appended,
       flags: member.flags ?? 0,
       path: member.path,
     };
-    offsets += record.size;
+    offsets += appended;
     return record;
   });
   const parts: Buffer[] = [Buffer.alloc(16), Buffer.alloc(4)];
@@ -118,6 +127,8 @@ const buildTable = (
     row.writeUInt32BE(record.flags, 16);
     parts.push(row, cstring(record.path));
   }
+  if (options.tableTrailingBytes !== undefined)
+    parts.push(Buffer.alloc(options.tableTrailingBytes));
   return Buffer.concat(parts);
 };
 
@@ -146,6 +157,7 @@ export const buildUnityFs = (
     Buffer.concat(contents),
     blockSize,
     blockCompression,
+    options.blockFlags,
   );
   const table = buildTable(members, contents, blockRecords, options);
   const compressedTable = maybeCompress(table, blocksInfoCompression);

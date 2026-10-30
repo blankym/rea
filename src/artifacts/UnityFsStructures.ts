@@ -1,5 +1,6 @@
 import type { FileHandle } from "node:fs/promises";
 import { ArtifactReaderFailure } from "./ArtifactReader.js";
+import { normalizeArtifactPath } from "./ArtifactPaths.js";
 import { readPckBytes } from "./GodotPckLocation.js";
 import { decodeLz4Block } from "../gpu/Lz4Block.js";
 import {
@@ -19,6 +20,10 @@ import {
 
 /** One UnityFS block is producer-chunked well below this; larger claims are malformed. */
 const MAX_BLOCK_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
+/** Encoded and decoded blocks-info tables stay bounded before either is allocated. */
+const MAX_BLOCKS_INFO_BYTES = 64 * 1024 * 1024;
+/** Parsed rows become JavaScript objects; bound row creation before any array grows. */
+const MAX_DIRECTORY_ROWS = 512 * 1024;
 /** Signature, version, two bounded strings and the fixed tail; reads are bounded. */
 const HEADER_PREFIX_MAX = 8 + 4 + UNITYFS_HEADER_STRING_MAX * 2 + 20;
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -138,12 +143,28 @@ const decodeBlocksInfoTable = async (
   if (
     compression === UNITYFS_COMPRESSION_LZ4 ||
     compression === UNITYFS_COMPRESSION_LZ4HC
-  )
-    return decodeLz4Block(
-      compressed,
-      header.uncompressedBlocksInfoSize,
-      signal,
-    );
+  ) {
+    if (header.uncompressedBlocksInfoSize > MAX_BLOCKS_INFO_BYTES)
+      throw new ArtifactReaderFailure(
+        "limit",
+        "UnityFS blocks-info exceeds the 64 MiB decoded table budget",
+        { boundary: "memory" },
+      );
+    try {
+      return await decodeLz4Block(
+        compressed,
+        header.uncompressedBlocksInfoSize,
+        signal,
+      );
+    } catch (cause: unknown) {
+      if (cause instanceof ArtifactReaderFailure) throw cause;
+      throw new ArtifactReaderFailure(
+        "format",
+        "UnityFS is malformed: blocks-info does not decode to its declared size",
+        { cause },
+      );
+    }
+  }
   throw new ArtifactReaderFailure(
     "unavailable",
     `UnityFS blocks-info compression 0x${String(compression)} is unsupported`,
@@ -156,6 +177,12 @@ const parseBlocks = (table: Buffer): UnityFsBlock[] => {
   const blockCount = table.readUInt32BE(16);
   if (20 + blockCount * 10 + 4 > table.length)
     throw unityFsFormatFailure("declared block count exceeds the table");
+  if (blockCount > MAX_DIRECTORY_ROWS)
+    throw new ArtifactReaderFailure(
+      "limit",
+      "UnityFS declares more block rows than the reader retains",
+      { boundary: "memory" },
+    );
   const blocks: UnityFsBlock[] = [];
   let cursor = 20;
   let compressedStart = 0;
@@ -196,6 +223,12 @@ const parseNodes = (
   cursor += 4;
   if (cursor + nodeCount * 21 > table.length)
     throw unityFsFormatFailure("declared node count exceeds the table");
+  if (nodeCount > MAX_DIRECTORY_ROWS)
+    throw new ArtifactReaderFailure(
+      "limit",
+      "UnityFS declares more member rows than the reader retains",
+      { boundary: "memory" },
+    );
   const streamSize =
     blocks.length === 0
       ? 0
@@ -203,6 +236,8 @@ const parseNodes = (
         (blocks[blocks.length - 1]?.uncompressedSize ?? 0);
   const nodes: UnityFsNode[] = [];
   for (let index = 0; index < nodeCount; index++) {
+    if (cursor + 20 > table.length)
+      throw unityFsFormatFailure("node row is truncated");
     const offsetBig = table.readBigUInt64BE(cursor);
     const sizeBig = table.readBigUInt64BE(cursor + 8);
     const flags = table.readUInt32BE(cursor + 16);
@@ -220,8 +255,7 @@ const parseNodes = (
       );
     }
     cursor = nameEnd + 1;
-    if (path.length === 0 || path.includes("\0") || path.includes(".."))
-      throw unityFsFormatFailure("empty or traversal member path");
+    path = normalizeArtifactPath(path);
     if (
       offsetBig > BigInt(streamSize) ||
       sizeBig > BigInt(streamSize) - offsetBig
@@ -266,6 +300,12 @@ export const readUnityFsBlocksInfo = async (
   size: number,
   signal?: AbortSignal,
 ): Promise<UnityFsBlocksInfo> => {
+  if (header.compressedBlocksInfoSize > MAX_BLOCKS_INFO_BYTES)
+    throw new ArtifactReaderFailure(
+      "limit",
+      "UnityFS blocks-info exceeds the 64 MiB encoded table budget",
+      { boundary: "memory" },
+    );
   const compressed = await readPckBytes(
     handle,
     header.blocksInfoOffset,
